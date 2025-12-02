@@ -1,0 +1,5 @@
+{
+  "name": "Copy of 網購包裝減量換算與會計師報表產生工具",
+  "description": "自動合併銷貨明細與包裝樣板，計算網購包裝減量比值，判定是否符合法規限重，並產生會計稽核報表。",
+  "requestFramePermissions": []
+}
