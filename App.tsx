@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
-import { processData } from "./utils/processData";
+import { processData } from "./utils/processor";
 import { ReportRow } from "./types";
 
 const App: React.FC = () => {
