@@ -1,24 +1,7 @@
 import React, { useState, useEffect } from "react";
 import * as XLSX from "xlsx";
-import { saveAs } from "file-saver";
 import { processData } from "./utils/processData";
 import { ReportRow } from "./types";
-
-/* 將 File 轉 base64 */
-const fileToBase64 = (file: File): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-
-/* 將 base64 還原成 File */
-const base64ToFile = async (base64: string, fileName: string): Promise<File> => {
-  const res = await fetch(base64);
-  const blob = await res.blob();
-  return new File([blob], fileName);
-};
 
 const App: React.FC = () => {
   const [salesFile, setSalesFile] = useState<File | null>(null);
@@ -26,58 +9,39 @@ const App: React.FC = () => {
   const [result, setResult] = useState<ReportRow[]>([]);
 
   // --------------------------------------------------------
-  // ⭐ 1. 初始化：從 localStorage 載入上次檔案與結果
+  // ⭐ 1. 初始化：從 localStorage 載入上次的紀錄
   // --------------------------------------------------------
   useEffect(() => {
-    const savedSalesName = localStorage.getItem("saved_salesFileName");
-    const savedSalesData = localStorage.getItem("saved_salesFileData");
-
-    const savedTemplateName = localStorage.getItem("saved_templateFileName");
-    const savedTemplateData = localStorage.getItem("saved_templateFileData");
-
+    const savedSales = localStorage.getItem("saved_salesFileName");
+    const savedTemplate = localStorage.getItem("saved_templateFileName");
     const savedResult = localStorage.getItem("saved_resultData");
 
-    // 還原銷貨明細
-    if (savedSalesName && savedSalesData) {
-      base64ToFile(savedSalesData, savedSalesName).then((file) =>
-        setSalesFile(file)
-      );
+    if (savedSales) {
+      setSalesFile({ name: savedSales } as File);
     }
-
-    // 還原包裝樣板
-    if (savedTemplateName && savedTemplateData) {
-      base64ToFile(savedTemplateData, savedTemplateName).then((file) =>
-        setTemplateFile(file)
-      );
+    if (savedTemplate) {
+      setTemplateFile({ name: savedTemplate } as File);
     }
-
-    // 還原結果
     if (savedResult) {
       try {
         setResult(JSON.parse(savedResult));
-      } catch (e) {
-        console.error("Failed to parse saved result");
+      } catch {
+        console.error("Saved result parse failed");
       }
     }
   }, []);
 
   // --------------------------------------------------------
-  // ⭐ 2. 上傳檔案處理（同時存 file + base64）
+  // ⭐ 2. 上傳檔案處理
   // --------------------------------------------------------
   const handleFileUpload =
     (setter: React.Dispatch<React.SetStateAction<File | null>>, key: string) =>
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0] || null;
       if (!file) return;
 
       setter(file);
-
-      // 儲存檔名
-      localStorage.setItem(`${key}Name`, file.name);
-
-      // 儲存檔案內容（base64）
-      const base64 = await fileToBase64(file);
-      localStorage.setItem(`${key}Data`, base64);
+      localStorage.setItem(key, file.name);
     };
 
   // --------------------------------------------------------
@@ -89,8 +53,8 @@ const App: React.FC = () => {
       return;
     }
 
-    const readExcel = (file: File): Promise<any[]> =>
-      new Promise((resolve, reject) => {
+    const readExcel = (file: File): Promise<any[]> => {
+      return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (e) => {
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
@@ -102,19 +66,18 @@ const App: React.FC = () => {
         reader.onerror = reject;
         reader.readAsArrayBuffer(file);
       });
+    };
 
     const salesData = await readExcel(salesFile);
     const templateData = await readExcel(templateFile);
-
     const processed = processData(salesData, templateData);
-    setResult(processed);
 
-    // ⭐ 儲存結果
+    setResult(processed);
     localStorage.setItem("saved_resultData", JSON.stringify(processed));
   };
 
   // --------------------------------------------------------
-  // ⭐ 4. 匯出 Excel
+  // ⭐ 4. 匯出 Excel（不使用 file-saver，改用 XLSX 內建下載）
   // --------------------------------------------------------
   const exportExcel = () => {
     if (result.length === 0) {
@@ -126,16 +89,7 @@ const App: React.FC = () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Report");
 
-    const excelBuffer = XLSX.write(workbook, {
-      bookType: "xlsx",
-      type: "array",
-    });
-
-    const file = new Blob([excelBuffer], {
-      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    });
-
-    saveAs(file, "報表結果.xlsx");
+    XLSX.writeFile(workbook, "報表結果.xlsx");
   };
 
   return (
@@ -148,7 +102,7 @@ const App: React.FC = () => {
         <input
           type="file"
           accept=".xlsx,.xls,.csv"
-          onChange={handleFileUpload(setSalesFile, "saved_salesFile")}
+          onChange={handleFileUpload(setSalesFile, "saved_salesFileName")}
         />
         {salesFile && <p>📄 {salesFile.name}</p>}
       </div>
@@ -159,7 +113,7 @@ const App: React.FC = () => {
         <input
           type="file"
           accept=".xlsx,.xls,.csv"
-          onChange={handleFileUpload(setTemplateFile, "saved_templateFile")}
+          onChange={handleFileUpload(setTemplateFile, "saved_templateFileName")}
         />
         {templateFile && <p>📄 {templateFile.name}</p>}
       </div>
@@ -171,7 +125,6 @@ const App: React.FC = () => {
         📊 開始換算產生報表
       </button>
 
-      {/* 結果表格 */}
       {result.length > 0 && (
         <div style={{ marginTop: "40px" }}>
           <h3>已處理 {result.length} 筆資料</h3>
