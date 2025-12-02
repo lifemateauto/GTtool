@@ -1,120 +1,153 @@
-import { useState, useEffect } from "react";
-import { parseFile } from "./utils/parseFile";
-import { generateReport } from "./utils/generateReport";
-import type { ParsedData } from "./types";
+import React, { useState, useEffect } from "react";
+import * as XLSX from "xlsx";
+import { saveAs } from "file-saver";
+import { processData } from "./utils/processData";
+import { ReportRow } from "./types";
 
-function App() {
-  const [salesData, setSalesData] = useState<ParsedData | null>(null);
-  const [templateData, setTemplateData] = useState<ParsedData | null>(null);
-  const [report, setReport] = useState<any>(null);
+const App: React.FC = () => {
+  const [salesFile, setSalesFile] = useState<File | null>(null);
+  const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const [result, setResult] = useState<ReportRow[]>([]);
 
-  // ===============================
-  // ① 初始化：從 LocalStorage 讀取舊紀錄
-  // ===============================
+  // --------------------------------------------------------
+  // ⭐ 1. 初始化：從 localStorage 載入上次的紀錄
+  // --------------------------------------------------------
   useEffect(() => {
-    const saved = localStorage.getItem("gtool-storage");
-    if (saved) {
+    const savedSales = localStorage.getItem("saved_salesFileName");
+    const savedTemplate = localStorage.getItem("saved_templateFileName");
+    const savedResult = localStorage.getItem("saved_resultData");
+
+    if (savedSales) {
+      setSalesFile({ name: savedSales } as File); // 用假的 File 物件呈現 UI
+    }
+
+    if (savedTemplate) {
+      setTemplateFile({ name: savedTemplate } as File);
+    }
+
+    if (savedResult) {
       try {
-        const data = JSON.parse(saved);
-        if (data.salesData) setSalesData(data.salesData);
-        if (data.templateData) setTemplateData(data.templateData);
-        if (data.report) setReport(data.report);
-      } catch (e) {
-        console.error("讀取 localStorage 發生錯誤:", e);
+        setResult(JSON.parse(savedResult));
+      } catch {
+        console.error("Saved result parse failed");
       }
     }
   }, []);
 
-  // ===============================
-  // ② 當資料變動 → 自動存進 LocalStorage
-  // ===============================
-  useEffect(() => {
-    const data = {
-      salesData,
-      templateData,
-      report,
+  // --------------------------------------------------------
+  // ⭐ 2. 上傳檔案處理
+  // --------------------------------------------------------
+  const handleFileUpload =
+    (setter: React.Dispatch<React.SetStateAction<File | null>>, key: string) =>
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0] || null;
+      if (!file) return;
+
+      setter(file);
+      localStorage.setItem(key, file.name); // 儲存檔名
     };
-    localStorage.setItem("gtool-storage", JSON.stringify(data));
-  }, [salesData, templateData, report]);
 
-  // ===============================
-  // ③ 檔案上傳處理
-  // ===============================
-  const handleUploadSales = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const parsed = await parseFile(file);
-    setSalesData(parsed);
-  };
-
-  const handleUploadTemplate = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const parsed = await parseFile(file);
-    setTemplateData(parsed);
-  };
-
-  // ===============================
-  // ④ 產生報表
-  // ===============================
-  const handleGenerate = () => {
-    if (!salesData || !templateData) {
-      alert("⚠️ 請先上傳銷貨明細 + 包裝樣板");
+  // --------------------------------------------------------
+  // ⭐ 3. 開始換算
+  // --------------------------------------------------------
+  const handleProcess = async () => {
+    if (!salesFile || !templateFile) {
+      alert("請先上傳兩份檔案！");
       return;
     }
-    const result = generateReport(salesData, templateData);
-    setReport(result);
+
+    const readExcel = (file: File): Promise<any[]> => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: "array" });
+          const sheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[sheetName];
+          resolve(XLSX.utils.sheet_to_json(worksheet));
+        };
+        reader.onerror = reject;
+        reader.readAsArrayBuffer(file);
+      });
+    };
+
+    const salesData = await readExcel(salesFile);
+    const templateData = await readExcel(templateFile);
+
+    const processed = processData(salesData, templateData);
+    setResult(processed);
+
+    // ⭐ 儲存結果進 localStorage
+    localStorage.setItem("saved_resultData", JSON.stringify(processed));
   };
 
-  // ===============================
-  // ⑤ 清除紀錄
-  // ===============================
-  const handleClear = () => {
-    setSalesData(null);
-    setTemplateData(null);
-    setReport(null);
-    localStorage.removeItem("gtool-storage");
+  // --------------------------------------------------------
+  // ⭐ 4. 匯出 Excel
+  // --------------------------------------------------------
+  const exportExcel = () => {
+    if (result.length === 0) {
+      alert("沒有可匯出的資料！");
+      return;
+    }
+
+    const worksheet = XLSX.utils.json_to_sheet(result);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Report");
+
+    const excelBuffer = XLSX.write(workbook, {
+      bookType: "xlsx",
+      type: "array",
+    });
+
+    const file = new Blob([excelBuffer], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+
+    saveAs(file, "報表結果.xlsx");
   };
 
-  // ===============================
-  // ⑥ UI 渲染
-  // ===============================
   return (
-    <div style={{ padding: 24 }}>
-      <h1>網購包裝減量換算工具</h1>
+    <div style={{ padding: "40px" }}>
+      <h1>網購包裝減量換算與會計師報表產生工具</h1>
 
-      <div style={{ marginBottom: 20 }}>
+      {/* 上傳銷貨明細 */}
+      <div>
         <h3>1. 上傳銷貨明細</h3>
-        <input type="file" accept=".xlsx,.xls,.csv" onChange={handleUploadSales} />
-        {salesData && <p>✔ 已載入銷貨資料，共 {salesData.rows.length} 列</p>}
+        <input
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          onChange={handleFileUpload(setSalesFile, "saved_salesFileName")}
+        />
+        {salesFile && <p>📄 {salesFile.name}</p>}
       </div>
 
-      <div style={{ marginBottom: 20 }}>
+      {/* 上傳包裝樣板 */}
+      <div style={{ marginTop: "20px" }}>
         <h3>2. 上傳包裝樣板</h3>
         <input
           type="file"
           accept=".xlsx,.xls,.csv"
-          onChange={handleUploadTemplate}
+          onChange={handleFileUpload(setTemplateFile, "saved_templateFileName")}
         />
-        {templateData && <p>✔ 已載入樣板資料，共 {templateData.rows.length} 列</p>}
+        {templateFile && <p>📄 {templateFile.name}</p>}
       </div>
 
-      <button onClick={handleGenerate} style={{ marginRight: 12 }}>
-        產生會計報表
+      <button
+        style={{ marginTop: "30px", padding: "10px 20px" }}
+        onClick={handleProcess}
+      >
+        📊 開始換算產生報表
       </button>
 
-      <button onClick={handleClear} style={{ background: "#eee" }}>
-        清除紀錄
-      </button>
-
-      {report && (
-        <div style={{ marginTop: 32 }}>
-          <h2>📄 報表結果</h2>
-          <pre>{JSON.stringify(report, null, 2)}</pre>
+      {/* 結果表格 */}
+      {result.length > 0 && (
+        <div style={{ marginTop: "40px" }}>
+          <h3>已處理 {result.length} 筆資料</h3>
+          <button onClick={exportExcel}>📥 下載 Excel (.xlsx)</button>
         </div>
       )}
     </div>
   );
-}
+};
 
 export default App;
